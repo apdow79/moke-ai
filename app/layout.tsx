@@ -3,8 +3,9 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
+  title: 'Foundry — Build full websites and apps from a prompt',
+  description:
+    'Foundry is a free AI agent that turns plain language into production-ready websites and apps, then connects GitHub, Supabase, and Vercel.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -39,7 +40,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <body className="antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
