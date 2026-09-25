@@ -1,6 +1,15 @@
 import { streamText } from "ai"
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 
 export const maxDuration = 60
+
+const openrouter = createOpenAICompatible({
+  name: "openrouter",
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY,
+})
+
+const MODEL_ID = "z-ai/glm-5.2:free"
 
 export const ERROR_MARKER = "\u0000FOUNDRY_ERROR\u0000"
 
@@ -23,7 +32,7 @@ export async function POST(req: Request) {
   }
 
   const result = streamText({
-    model: "anthropic/claude-sonnet-4.5",
+    model: openrouter(MODEL_ID),
     system: SYSTEM_PROMPT,
     prompt: `Build this: ${prompt.trim()}`,
     temperature: 0.7,
