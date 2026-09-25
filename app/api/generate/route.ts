@@ -9,7 +9,14 @@ const openrouter = createOpenAICompatible({
   apiKey: process.env.OPENROUTER_API_KEY,
 })
 
-const MODEL_ID = "z-ai/glm-5.2:free"
+// Free models share a rate-limited upstream pool, so we try several in order
+// and fall back to the next one whenever a provider is overloaded (429).
+const MODEL_IDS = [
+  "z-ai/glm-5.2:free",
+  "qwen/qwen3.8-27b:free",
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+]
 
 export const ERROR_MARKER = "\u0000FOUNDRY_ERROR\u0000"
 
@@ -31,38 +38,59 @@ export async function POST(req: Request) {
     return new Response("A prompt is required.", { status: 400 })
   }
 
-  const result = streamText({
-    model: openrouter(MODEL_ID),
-    system: SYSTEM_PROMPT,
-    prompt: `Build this: ${prompt.trim()}`,
-    temperature: 0.7,
-  })
-
   const encoder = new TextEncoder()
 
   function friendly(raw: string) {
-    return /credit card|verification_required|unlock your free credits/i.test(raw)
-      ? "The AI Gateway needs billing enabled before it can generate. Add a payment method to your Vercel team to unlock the free credits, then try again."
-      : `Generation failed: ${raw}`
+    if (/rate-limit|overloaded|429|temporarily/i.test(raw)) {
+      return "All free models are busy right now (they share a rate-limited pool). Please try again in a few seconds."
+    }
+    if (/credit card|verification_required|unlock your free credits/i.test(raw)) {
+      return "The provider needs billing enabled before it can generate. Add a payment method, then try again."
+    }
+    if (/api key|no auth|unauthor|401/i.test(raw)) {
+      return "The OpenRouter API key is missing or invalid. Add a valid OPENROUTER_API_KEY and try again."
+    }
+    return `Generation failed: ${raw}`
   }
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      try {
-        for await (const part of result.fullStream) {
-          if (part.type === "text-delta") {
-            controller.enqueue(encoder.encode(part.text))
-          } else if (part.type === "error") {
-            const raw = part.error instanceof Error ? part.error.message : String(part.error)
-            controller.enqueue(encoder.encode(`${ERROR_MARKER}${friendly(raw)}`))
+      let lastError = "No models were available."
+
+      for (const modelId of MODEL_IDS) {
+        const result = streamText({
+          model: openrouter(modelId),
+          system: SYSTEM_PROMPT,
+          prompt: `Build this: ${prompt.trim()}`,
+          temperature: 0.7,
+        })
+
+        let emittedText = false
+        try {
+          for await (const part of result.fullStream) {
+            if (part.type === "text-delta") {
+              emittedText = true
+              controller.enqueue(encoder.encode(part.text))
+            } else if (part.type === "error") {
+              lastError = part.error instanceof Error ? part.error.message : String(part.error)
+              break
+            }
           }
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error)
         }
-      } catch (error) {
-        const raw = error instanceof Error ? error.message : String(error)
-        controller.enqueue(encoder.encode(`${ERROR_MARKER}${friendly(raw)}`))
-      } finally {
-        controller.close()
+
+        // Text streamed successfully from this model — we're done.
+        if (emittedText) {
+          controller.close()
+          return
+        }
+        // Otherwise the model failed before producing output; try the next one.
       }
+
+      // Every model failed before producing any output.
+      controller.enqueue(encoder.encode(`${ERROR_MARKER}${friendly(lastError)}`))
+      controller.close()
     },
   })
 
